@@ -1,0 +1,148 @@
+## expression_analysis.R by Rohan Maddamsetti.
+
+## In their response to my Brief Communications manuscript, Inigo Martincorena
+## asks whether the median expression level of genes in the LTEE that have
+## at least one mutation by 40,000 generations is different (less than?)
+## median expression in genes that have no mutations by 40,000 generations.
+
+## I want to ask basically the same  question with the DNA macroarray data that
+## Tim Cooper generated in 2003.
+
+## Question: Do genes with at least one synonymous mutation in the LTEE at 40K
+## generations, tend to have a higher mean expression level that genes with no
+## mutations?
+
+## Answer: Yes, but this reproduces the well known anti-correlation between
+## gene expression levels and evolutionary rates.
+
+## I changed the column names in arrays.txt so that R would input them properly
+## without weird formatting/renaming issues.
+expression.data <- read.table("/Users/Rohandinho/Desktop/Projects/luscombe-reanalysis/data/renamed_arrays.txt", header=TRUE)
+
+cai.data <- read.csv("/Users/Rohandinho/Desktop/Projects/luscombe-reanalysis/data/cai.csv", header=TRUE)
+
+thetaS.data <- read.csv("/Users/Rohandinho/Desktop/Projects/luscombe-reanalysis/data/data.csv", header=TRUE)
+
+thetaS.data <- unique(subset(thetaS.data, select=c(locus_tag, HGT.hits, gene.length, thetaS)))
+
+## Analyze pooled ancestral strains.
+
+ara.minus.ancestor1 <- subset(expression.data, select=c(Gene, Minus.Anc.1, Minus.Anc.2, Minus.Anc.3, Minus.Anc.4))
+ ara.minus.ancestor2 <- subset(expression.data, select=c(Gene, Minus.Anc.1.1, Minus.Anc.2.1, Minus.Anc.3.1, Minus.Anc.4.1))
+
+pooled.data <- subset(expression.data, select=c(Gene, Plus.Anc.1, Plus.Anc.2, Plus.Anc.3, Plus.Anc.4, Minus.Anc.1, Minus.Anc.2, Minus.Anc.3, Minus.Anc.4, Minus.Anc.1.1, Minus.Anc.2.1, Minus.Anc.3.1, Minus.Anc.4.1))
+
+expr.data <- pooled.data
+
+## This is the set of genes that maps well between the Tim Cooper's expression data, and
+## the REL606 genome.
+mapped.gene.data <- read.csv("/Users/Rohandinho/Desktop/Projects/luscombe-reanalysis/data/expression_mutation_data.csv", header=TRUE)
+
+## Remove genes in the expression data that don't map nicely to the REL606 genome.
+good.expr.data <- subset(expr.data, Gene %in% mapped.gene.data$Gene)
+
+## Add a column for the number of synonymous mutations at each locus.
+## The easiest way is simply to merge these two data frames.
+merged.data <- merge(good.expr.data, mapped.gene.data)
+merged.data2 <- merge(merged.data, thetaS.data)
+
+## Add a column for CAI values.
+merged.data3 <- merge(merged.data2, cai.data)
+
+
+## Choose genes with reproducible expression levels, i.e. genes with a |CV| < 0.2
+## This should be > 1,300 genes per Cooper 2003.
+just.expression <- merged.data3
+just.expression$Gene <- NULL
+just.expression$locus_tag <- NULL
+just.expression$synonymous.mutations <- NULL
+just.expression$CAI <- NULL
+just.expression$HGT.hits <- NULL
+just.expression$gene.length <- NULL
+just.expression$thetaS <- NULL
+  
+merged.data3$Mean <- apply(just.expression, 1, mean)
+merged.data3$SD <- apply(just.expression, 1, sd)
+merged.data3$CV <- merged.data3$SD/merged.data3$Mean
+reproducible.expr.data <- subset(merged.data3, abs(CV) < 0.2)
+  
+## Plot the distributions of all genes, mutated genes, and non-mutated gene
+## expression.
+library(ggplot2)
+
+reproducible.expr.data$Mutated <- sapply(reproducible.expr.data$synonymous.mutations, function (x) ifelse(x>0,TRUE,FALSE))
+
+expr.plot = ggplot(reproducible.expr.data, aes(x=Mean,fill=Mutated))
+expr.plot +  geom_histogram(alpha=0.5, binwidth=0.1) + xlab("Mean log-transformed gene expression") + ylab("Count") + theme_classic() + coord_cartesian(ylim=c(0,400))
+ggsave("/Users/Rohandinho/Desktop/mutation_expr_dist.pdf")
+
+mutated.expr.data <- subset(reproducible.expr.data, Mutated == TRUE)
+non.mutated.expr.data <- subset(reproducible.expr.data, Mutated == FALSE)
+
+##DO TESTS, BUT ONLY ON LOCI WITH thetaS ESTIMATES
+test1 <- mutated.expr.data[!is.na(mutated.expr.data$thetaS),]
+test2 <- non.mutated.expr.data[!is.na(non.mutated.expr.data$thetaS),]
+test3=reproducible.expr.data[!is.na(reproducible.expr.data$thetaS),]
+t.test(x=test1$Mean,y=test2$Mean)
+wilcox.test(x=test1$gene.length, y=test2$gene.length)
+mut.len.sample = sample(test1$gene.length,size=50,replace=FALSE)
+non.mut.len.sample = sample(test2$gene.length,size=50,replace=FALSE)
+t.test(mut.len.sample, non.mut.len.sample)
+
+qplot(data=test3,x=synonymous.mutations, y=Mean, position=position_jitter(width=0.2,height=0))
+wilcox.test(x=test1$CAI, y=test2$CAI,alternative="greater")
+
+## Since these distributions are approximately normal,
+## do a Welch's t-test to see if the mean of the two distributions are
+## identical.
+t.test(x=mutated.expr.data$Mean,y=non.mutated.expr.data$Mean)
+
+## The p-value for a dS association with gene length is 14 orders of magnitude
+## smaller than that for expression. This shows that this dominates where
+## dS occurs, even with resampling to ensure both classes are the same size.
+wilcox.test(x=mutated.expr.data$gene.length, y=non.mutated.expr.data$gene.length)
+## I repeated 
+mutated.gene.len.sample = sample(x=mutated.expr.data$gene.length,size=100,replace=FALSE)
+non.mutated.gene.len.sample = sample(x=non.mutated.expr.data$gene.length,size=100,replace=FALSE)
+t.test(x=mutated.gene.len.sample, y=non.mutated.gene.len.sample)
+
+## Scatterplot to see if there is a correlation between expression and gene length.
+qplot(data=reproducible.expr.data, x=gene.length,y=Mean)
+
+## Scatterplot to see if there is a correlation between the
+## number of synonymous mutations, and gene expression at the locus.
+qplot(data=reproducible.expr.data,x=synonymous.mutations, y=Mean, position=position_jitter(width=0.2,height=0))
+ggsave("/Users/Rohandinho/Desktop/expression_dS.pdf")
+
+## Scatterplot to see if there is a correlation between CAI
+##, and thetaS at the locus.
+qplot(data=reproducible.expr.data,x=thetaS, y=CAI)
+
+## Scatterplot to see if there is a correlation between synonymous mutations
+## and CAI values.
+qplot(data=reproducible.expr.data,x=synonymous.mutations, y=CAI, position=position_jitter(width=0.2,height=0))
+ggsave("/Users/Rohandinho/Desktop/CAI_dS.pdf")
+
+wilcox.test(x=mutated.expr.data$CAI, y=non.mutated.expr.data$CAI,alternative="greater")
+
+## The distributions.
+ggplot(reproducible.expr.data, aes(x=CAI,fill=Mutated)) +
+  geom_histogram(alpha=0.3, binwidth=0.01)
+ggsave("/Users/Rohandinho/Desktop/mutation_CAI_dist.pdf")
+
+
+model = lm(Mean~synonymous.mutations, data=reproducible.expr.data)
+confint(model) ## a linear regression shows no significant effect.
+## probably not appropriate though.
+
+## a linear regression shows a weak, but significant positive correlation
+## between gene length and gene expression.
+model2 = lm(Mean~gene.length, data=reproducible.expr.data)
+confint(model2)
+
+model3 = lm(Mean~gene.length, data=test3)
+
+##Plot distribution of gene lengths.
+length.plot = ggplot(reproducible.expr.data, aes(x=gene.length, fill=Mutated))
+length.plot + geom_histogram(alpha=0.5, binwidth=50) + xlab("Gene length") + ylab("Count") + theme_classic() + coord_cartesian(xlim=c(0,5000), ylim=c(0,160))
+ggsave("/Users/Rohandinho/Desktop/mutation_length_dist.pdf")
